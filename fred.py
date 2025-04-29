@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+from datetime import datetime
 import requests
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,23 +15,37 @@ class Fred:
         self.df = None
         self.transform_codes = None
         self.df_raw = None
+        self.df_appendix = None
 
     def __repr__(self):
         return f"Fred(path={self.path})"
 
-    def read(self):
+    def read(self, start_date=None, end_date=None):
         if self.path is None:
             self.read_url()
         # read csv file with pandas
         self.df = pd.read_csv(self.path, skiprows=[1], parse_dates=['sasdate'])
-        # order by sasdate
         self.df = self.df.sort_values(by='sasdate')
+        self.df.set_index('sasdate', inplace=True)
+        self.df.index = self.df.index.to_period('M')
+        if start_date is not None:
+            self.df = self.df[self.df.index >= start_date]
+        if end_date is not None:
+            self.df = self.df[self.df.index <= end_date]
         # read the first row of the csv file to get the transform codes
         self.transform_codes = pd.read_csv(self.path, nrows=1, usecols=np.arange(1, self.df.shape[1]))
         # convert transform_codes to a dictionary
         self.transform_codes = self.transform_codes.to_dict(orient='records')[0]
+        # read appendix csv
+        self.df_appendix = pd.read_csv("appendix/FRED-MD_updated_appendix.csv", usecols=["fred", "description", "group"])
+        self.df_appendix.set_index("fred", inplace=True)
+        # hierarchical indexing
+        self.df.columns = pd.MultiIndex.from_arrays(
+            [fred.df.columns.tolist(), fred.df_appendix.group.tolist()],
+            names=["column", "group"]
+        )
 
-    def transform(self, user_codes=None):
+    def transform(self, user_codes=None, remove_outliers=True):
         if self.df is None or self.transform_codes is None:
             raise ValueError("Data has not been read. Please run the 'read' method first.")
         # copy df to a new dataframe
@@ -54,10 +69,21 @@ class Fred:
                     self.df[col] = np.log(self.df_raw[col]).diff()
                 case 6:  # second difference of log
                     self.df[col] = np.log(self.df_raw[col]).diff().diff()
-                case 7:  # percentage change
-                    self.df[col] = self.df_raw[col].pct_change()
+                case 7:  # first difference of percentage change
+                    self.df[col] = self.df_raw[col].pct_change().diff()
                 case _:
                     raise ValueError(f"Unknown transformation code: {code}")
+            # remove outliers
+            if remove_outliers:
+                # remove outliers that deviate from median by more than 10 interquartile ranges
+                q1 = self.df[col].quantile(0.25)
+                q3 = self.df[col].quantile(0.75)
+                iqr = 10*(q3 - q1) # 10 times the interquartile range
+                self.df[col] = np.where(
+                    (self.df[col]-self.df[col].median()).abs() > iqr,
+                    np.nan,
+                    self.df[col]
+                )
 
     def read_url(self):
         # download the csv file from the url
@@ -73,8 +99,23 @@ class Fred:
             raise ValueError("No data have been read.")
         return self.df
     
+    def ask_appendix(self, index=None):
+        # check if the dataframe is empty
+        if self.df_appendix is None:
+            raise ValueError("No appendix data have been read.")
+        
+        if index is not None:
+            return self.df_appendix.loc[index]
+        else:
+            return self.df_appendix
+
     def em(self):
-        pass
+        if self.df_raw is None:
+            raise ValueError("Transformation has not been applied. Please run the 'transform' method first.")
+        # initialize missing values with mean of the column
+        self.df.fillna(self.df.mean(), axis=0, inplace=True)
+        
+        
 
     def plot_missing(self, index=None, columns=None):
         # check if the dataframe is empty
@@ -101,7 +142,7 @@ class Fred:
         # set the ticks and labels
         ax.set_xticks(np.arange(len(column_names)))
         ax.set_xticklabels(column_names)
-        years = self.df['sasdate'].dt.year
+        years = self.df.index.year
         unique_years, year_indices = np.unique(years, return_index=True)
         unique_years = unique_years[::2]
         year_indices = year_indices[::2]
@@ -114,7 +155,7 @@ class Fred:
         plt.xticks(rotation=45)
         plt.show()
         
-
+    
     def _change_transform_code(self, dict):
         # change the transform codes in the dictionary
         for key, value in dict.items():
@@ -122,8 +163,9 @@ class Fred:
                 self.transform_codes[key] = value
             else:
                 raise KeyError(f"{key} not found in transform codes")
-            
-    def _download(self, url):
+    
+    @staticmethod
+    def _download(url):
         # download the csv file from the url
         local_name = url.split("/")[-1]
         with open(local_name, "wb") as f:
@@ -137,9 +179,18 @@ class Fred:
 
 if __name__ == "__main__":
     fred = Fred(path="current.csv")
-    fred.read()
-    fred.transform()
-    fred.plot_missing(index=np.arange(50,60))
-    fred.plot_missing(columns=['RPI', 'USCONS'])
+    fred.read(start_date="2000-01-01", end_date="2023-10-01")
+    fred.transform(remove_outliers=True)
+    # print(fred.df.loc["2020", fred.df.columns[1]])
+    # print(fred.df_appendix.head())
+    # print(fred.ask_appendix(index=['CUSR0000SAD', 'USCONS', 'VIXCLSx']))
+    # print(fred.df_appendix.loc[:,"group"])
+    # fred.plot_missing(index=np.arange(0, 4))
+    # print(len(fred.df.columns))
+    # print(len(fred.df_appendix.index))
+    print(fred.df.head())
+    fred.em()
+    print(fred.df.head())
+    # fred.plot_missing(columns=['CUSR0000SAD', 'USCONS', 'VIXCLSx'])
  
   
