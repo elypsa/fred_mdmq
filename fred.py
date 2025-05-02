@@ -1,7 +1,10 @@
 import pandas as pd
-import os
 from datetime import datetime
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import TruncatedSVD
 import requests
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
@@ -16,6 +19,7 @@ class Fred:
         self.transform_codes = None
         self.df_raw = None
         self.df_appendix = None
+        self.outliers = None
 
     def __repr__(self):
         return f"Fred(path={self.path})"
@@ -55,6 +59,7 @@ class Fred:
         if user_codes is not None:
             self._change_transform_code(user_codes)
         # apply the transformation codes
+        init_na_mask = self.df.isna()
         for col, code in self.transform_codes.items():
             match code:
                 case 1:  # no transformation
@@ -78,12 +83,22 @@ class Fred:
                 # remove outliers that deviate from median by more than 10 interquartile ranges
                 q1 = self.df[col].quantile(0.25)
                 q3 = self.df[col].quantile(0.75)
-                iqr = 10*(q3 - q1) # 10 times the interquartile range
+                iqr = q3 - q1
                 self.df[col] = np.where(
-                    (self.df[col]-self.df[col].median()).abs() > iqr,
+                    (self.df[col]-self.df[col].median()).abs() > 10*iqr,
                     np.nan,
                     self.df[col]
                 )
+        # remove first two rows
+        self.df = self.df.iloc[2:]
+        if remove_outliers:
+            self.outliers = pd.concat([init_na_mask.sum(), self.df.isna().sum()], axis=1, keys=["Initial NA", "Current NA"])
+            self.outliers['Difference'] = self.outliers['Current NA'] - self.outliers['Initial NA']
+            self.outliers.sort_values(by='Difference', ascending=False, inplace=True)
+            print("Outliers removed (top10):")
+            print(self.outliers.head(10))
+            n_outliers = self.outliers['Difference'].sum()
+            print(f"Removed {n_outliers} outliers from the data.")
 
     def read_url(self):
         # download the csv file from the url
@@ -105,16 +120,52 @@ class Fred:
             raise ValueError("No appendix data have been read.")
         
         if index is not None:
-            return self.df_appendix.loc[index]
+            print(self.df_appendix.loc[index])
         else:
-            return self.df_appendix
+            print(self.df_appendix)
 
-    def em(self):
+    def em(self, max_iter=100, tol=1e-6):
+        # not ready yet
+        # todo:
+        # implement search for the best number of components (needs to be done in the pipeline!)
+        # find out which distance metric to use
+
         if self.df_raw is None:
             raise ValueError("Transformation has not been applied. Please run the 'transform' method first.")
-        # initialize missing values with mean of the column
-        self.df.fillna(self.df.mean(), axis=0, inplace=True)
         
+        df = self.df.copy()
+        na_mask = df.isna()
+        df.fillna(df.mean(), inplace=True) # initialize missing values with mean of the column
+        df = df.to_numpy(copy=True)
+        
+        # create pipeline
+        pipeline = Pipeline([
+            ('scale', StandardScaler()),
+            ('svd', TruncatedSVD(n_components=8, algorithm='arpack'))
+        ])
+        initial_scale = StandardScaler().fit(df)
+        iter = 0
+        while iter < max_iter:
+            F = pipeline.fit_transform(df)
+            df_ = pipeline.inverse_transform(F)
+            
+            distance = np.linalg.norm(df - df_)
+            if distance > tol:
+                df[na_mask] = df_[na_mask]
+            else:
+                break
+            iter += 1
+
+        # Print results
+        if iter == max_iter:
+            print(
+                f"EM alogrithm failed to converge afet Maximum iterations of {max_iter}. Distance = {distance}, tolerance was {tol}")
+        else:
+            print(f"EM algorithm converged after {iter} iterations")
+
+        # df[na_mask] = initial_scale.inverse_transform(F)[na_mask]
+        df = pd.DataFrame(df, columns=self.df.columns, index=self.df.index)
+        self.df = df
         
 
     def plot_missing(self, index=None, columns=None):
@@ -165,7 +216,7 @@ class Fred:
                 raise KeyError(f"{key} not found in transform codes")
     
     @staticmethod
-    def _download(url):
+    def _download(url='https://www.stlouisfed.org/-/media/project/frbstl/stlouisfed/research/fred-md/monthly/current.csv'):
         # download the csv file from the url
         local_name = url.split("/")[-1]
         with open(local_name, "wb") as f:
@@ -179,8 +230,11 @@ class Fred:
 
 if __name__ == "__main__":
     fred = Fred(path="current.csv")
-    fred.read(start_date="2000-01-01", end_date="2023-10-01")
+    fred.read(end_date="2023-10-01")
     fred.transform(remove_outliers=True)
+    # print(fred.outliers.index.get_level_values('column')[:5])
+    print(fred.ask_appendix(index=fred.outliers.index.get_level_values('column')[:5]))
+    fred.plot_missing(columns=fred.outliers.index.get_level_values('column')[:5])
     # print(fred.df.loc["2020", fred.df.columns[1]])
     # print(fred.df_appendix.head())
     # print(fred.ask_appendix(index=['CUSR0000SAD', 'USCONS', 'VIXCLSx']))
@@ -188,9 +242,5 @@ if __name__ == "__main__":
     # fred.plot_missing(index=np.arange(0, 4))
     # print(len(fred.df.columns))
     # print(len(fred.df_appendix.index))
-    print(fred.df.head())
-    fred.em()
-    print(fred.df.head())
-    # fred.plot_missing(columns=['CUSR0000SAD', 'USCONS', 'VIXCLSx'])
- 
-  
+    # print(fred.df.head())
+    # fred.em()
