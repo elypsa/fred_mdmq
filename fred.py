@@ -20,6 +20,7 @@ class Fred:
         self.df_raw = None
         self.df_appendix = None
         self.outliers = None
+        print("Fred object created.")
 
     def __repr__(self):
         return f"Fred(path={self.path})"
@@ -48,6 +49,9 @@ class Fred:
             [fred.df.columns.tolist(), fred.df_appendix.group.tolist()],
             names=["column", "group"]
         )
+        print("Data read successfully.")
+        print(f"\tData shape: {self.df.shape}")
+
 
     def transform(self, user_codes=None, remove_outliers=True):
         if self.df is None or self.transform_codes is None:
@@ -91,14 +95,15 @@ class Fred:
                 )
         # remove first two rows
         self.df = self.df.iloc[2:]
+        print("Transformation completed.")
         if remove_outliers:
             self.outliers = pd.concat([init_na_mask.sum(), self.df.isna().sum()], axis=1, keys=["Initial NA", "Current NA"])
             self.outliers['Difference'] = self.outliers['Current NA'] - self.outliers['Initial NA']
             self.outliers.sort_values(by='Difference', ascending=False, inplace=True)
-            print("Outliers removed (top10):")
-            print(self.outliers.head(10))
+            # print("Outliers removed (top10):")
+            # print(self.outliers.head(10))
             n_outliers = self.outliers['Difference'].sum()
-            print(f"Removed {n_outliers} outliers from the data.")
+            print(f"\tRemoved {n_outliers} outliers from the data.")
 
     def read_url(self):
         # download the csv file from the url
@@ -124,7 +129,7 @@ class Fred:
         else:
             print(self.df_appendix)
 
-    def em(self, max_iter=100, tol=1e-6):
+    def em(self, max_iter=5000, tol=1e-6):
         # not ready yet
         # todo:
         # implement search for the best number of components (needs to be done in the pipeline!)
@@ -143,29 +148,29 @@ class Fred:
             ('scale', StandardScaler()),
             ('svd', TruncatedSVD(n_components=8, algorithm='arpack'))
         ])
-        initial_scale = StandardScaler().fit(df)
         iter = 0
         while iter < max_iter:
+            # fit the pipeline to the data
             F = pipeline.fit_transform(df)
+            # transform the data back to the original space
             df_ = pipeline.inverse_transform(F)
-            
-            distance = np.linalg.norm(df - df_)
-            if distance > tol:
-                df[na_mask] = df_[na_mask]
-            else:
+            # Check if the factor estimates have converged
+            if np.allclose(df[na_mask], df_[na_mask], atol=tol):
                 break
+            df[na_mask] = df_[na_mask]
             iter += 1
 
         # Print results
         if iter == max_iter:
             print(
-                f"EM alogrithm failed to converge afet Maximum iterations of {max_iter}. Distance = {distance}, tolerance was {tol}")
+                f"EM alogrithm failed to converge after Maximum iterations of {max_iter}.")
         else:
             print(f"EM algorithm converged after {iter} iterations")
 
         # df[na_mask] = initial_scale.inverse_transform(F)[na_mask]
         df = pd.DataFrame(df, columns=self.df.columns, index=self.df.index)
         self.df = df
+        print("EM algorithm completed.")
         
 
     def plot_missing(self, index=None, columns=None):
@@ -205,7 +210,6 @@ class Fred:
         plt.colorbar(im, ticks=[0, 1], label='0 = Missing (gray), 1 = Present (white)')
         plt.xticks(rotation=45)
         plt.show()
-        
     
     def _change_transform_code(self, dict):
         # change the transform codes in the dictionary
@@ -232,9 +236,11 @@ if __name__ == "__main__":
     fred = Fred(path="current.csv")
     fred.read(end_date="2023-10-01")
     fred.transform(remove_outliers=True)
-    # print(fred.outliers.index.get_level_values('column')[:5])
-    print(fred.ask_appendix(index=fred.outliers.index.get_level_values('column')[:5]))
-    fred.plot_missing(columns=fred.outliers.index.get_level_values('column')[:5])
+    # print(fred.ask_appendix(index=fred.outliers.index.get_level_values('column')[:5]))
+
+
+
+    # fred.plot_missing(columns=fred.outliers.index.get_level_values('column')[:5])
     # print(fred.df.loc["2020", fred.df.columns[1]])
     # print(fred.df_appendix.head())
     # print(fred.ask_appendix(index=['CUSR0000SAD', 'USCONS', 'VIXCLSx']))
@@ -243,4 +249,5 @@ if __name__ == "__main__":
     # print(len(fred.df.columns))
     # print(len(fred.df_appendix.index))
     # print(fred.df.head())
-    # fred.em()
+    fred.em()
+    print(fred.df.isna().sum().sum())
