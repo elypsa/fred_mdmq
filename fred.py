@@ -4,7 +4,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import TruncatedSVD
 import requests
-import math
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
@@ -20,6 +19,7 @@ class Fred:
         self.df_raw = None
         self.df_appendix = None
         self.outliers = None
+        self.df_imp = None
         print("Fred object created.")
 
     def __repr__(self):
@@ -113,11 +113,11 @@ class Fred:
         self.path = local_name
         self.read()
 
-    def to_pandas(self):
-        # return the transformed dataframe
-        if self.df is None:
-            raise ValueError("No data have been read.")
-        return self.df
+    # def to_pandas(self):
+    #     # return the transformed dataframe
+    #     if self.df is None:
+    #         raise ValueError("No data have been read.")
+    #     return self.df
     
     def ask_appendix(self, index=None):
         # check if the dataframe is empty
@@ -169,9 +169,25 @@ class Fred:
 
         # df[na_mask] = initial_scale.inverse_transform(F)[na_mask]
         df = pd.DataFrame(df, columns=self.df.columns, index=self.df.index)
-        self.df = df
+        self.df_imp = df
         print("EM algorithm completed.")
-        
+    
+    def plot_imputed(self, column):
+        # check that EM algorithm has been run
+        if self.df_imp is None:
+            raise ValueError("EM algorithm has not been run. Please run the 'em' method first.")
+        # check that the column exists in the dataframe
+        if column not in self.df_imp.columns:
+            raise ValueError(f"Column {column} not found in the dataframe.")
+        # plot the original and imputed data
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(self.df.index.to_timestamp(), self.df[column], label='Original', color='blue', alpha=0.5)
+        ax.plot(self.df_imp.index.to_timestamp(), self.df_imp[column], label='Imputed', color='red', alpha=0.1)
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Value')
+        ax.set_title(f'Original vs Imputed Data for {column}')
+        ax.legend()
+        plt.show()
 
     def plot_missing(self, index=None, columns=None):
         # check if the dataframe is empty
@@ -234,7 +250,7 @@ class Fred:
 
 if __name__ == "__main__":
     fred = Fred(path="current.csv")
-    fred.read(end_date="2023-10-01")
+    fred.read()
     fred.transform(remove_outliers=True)
     # print(fred.ask_appendix(index=fred.outliers.index.get_level_values('column')[:5]))
 
@@ -250,4 +266,7 @@ if __name__ == "__main__":
     # print(len(fred.df_appendix.index))
     # print(fred.df.head())
     fred.em()
+    print(fred.df_imp.isna().sum().sum())
     print(fred.df.isna().sum().sum())
+    # print(fred.outliers)
+    fred.plot_imputed("UMCSENTx")
